@@ -1,4 +1,5 @@
-from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Form
+from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Form, Request
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -10,10 +11,21 @@ import torchaudio.transforms as T
 import tempfile
 import os
 import subprocess
+import soundfile as sf
+import traceback
 from database import SessionLocal, Transaction
 from models import CRNNWithAttn
 
 app = FastAPI(title="VoiceGuard AI API")
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    tb = traceback.format_exc()
+    print(f"Exception on {request.url}: {tb}")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"{type(exc).__name__}: {str(exc)}", "traceback": tb}
+    )
 
 class TransactionResponse(BaseModel):
     id: int
@@ -83,23 +95,75 @@ def get_db():
     finally:
         db.close()
 
+def load_audio_tensor(file_path: str):
+    # 1. Try soundfile directly
+    try:
+        data, sr = sf.read(file_path, dtype='float32')
+        if data.ndim == 1:
+            tensor = torch.from_numpy(data).unsqueeze(0)
+        else:
+            tensor = torch.from_numpy(data.T)
+        return tensor, sr
+    except Exception:
+        pass
+
+    # 2. Try torchaudio directly
+    try:
+        waveform, sr = torchaudio.load(file_path)
+        return waveform, sr
+    except Exception:
+        pass
+
+    # 3. Use ffmpeg to transcode to standard 16kHz 2-channel 16-bit PCM WAV
+    converted_path = file_path + ".converted.wav"
+    try:
+        cmd = ["ffmpeg", "-y", "-i", file_path, "-vn", "-ar", "16000", "-ac", "2", "-c:a", "pcm_s16le", converted_path]
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if os.path.exists(converted_path) and os.path.getsize(converted_path) > 0:
+            data, sr = sf.read(converted_path, dtype='float32')
+            if data.ndim == 1:
+                tensor = torch.from_numpy(data).unsqueeze(0)
+            else:
+                tensor = torch.from_numpy(data.T)
+            return tensor, sr
+        else:
+            err_msg = proc.stderr.decode(errors='ignore')[-300:]
+            raise ValueError(f"ffmpeg conversion failed: {err_msg}")
+    finally:
+        if os.path.exists(converted_path):
+            try:
+                os.remove(converted_path)
+            except Exception:
+                pass
+
 def preprocess(waveform, sample_rate):
     if sample_rate != 16000:
         resample = T.Resample(orig_freq=sample_rate, new_freq=16000)
         waveform = resample(waveform)
 
+    # Ensure 2 channels
     if waveform.shape[0] == 1:
         waveform = waveform.repeat(2, 1)
+    elif waveform.shape[0] > 2:
+        waveform = waveform[:2, :]
 
     max_len = 16000 * 4
     all_waveforms = []
-    for _ in range(waveform.shape[1] // max_len + 1):
-        if waveform.shape[1] >= max_len:
-            all_waveforms.append(waveform[:, :max_len])
-            waveform = waveform[:, max_len:]
-        elif waveform.shape[1] > 0 and waveform.shape[1] < max_len:
-            pad_len = max_len - waveform.shape[1]
-            all_waveforms.append(torch.nn.functional.pad(waveform, (0, pad_len)))
+    total_len = waveform.shape[1]
+    
+    if total_len == 0:
+        return []
+
+    # Slice into uniform 4-second chunks
+    start = 0
+    while start < total_len:
+        end = start + max_len
+        chunk = waveform[:, start:end]
+        if chunk.shape[1] < max_len:
+            pad_len = max_len - chunk.shape[1]
+            chunk = torch.nn.functional.pad(chunk, (0, pad_len))
+        all_waveforms.append(chunk)
+        start = end
 
     all_spec = []
     for wave in all_waveforms:
@@ -109,26 +173,14 @@ def preprocess(waveform, sample_rate):
 
 @app.post("/api/inference")
 async def inference(file: UploadFile = File(...)):
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as tmp_file:
+    ext = os.path.splitext(file.filename or "")[1] or ".webm"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp_file:
         content = await file.read()
         tmp_file.write(content)
         tmp_file_path = tmp_file.name
 
-    wav_path = tmp_file_path + ".wav"
-    
-    # Convert webm to wav if needed using torchaudio or ffmpeg
     try:
-        waveform, sample_rate = torchaudio.load(tmp_file_path)
-    except Exception as e:
-        # Fallback to ffmpeg subprocess
-        subprocess.run(["ffmpeg", "-y", "-i", tmp_file_path, wav_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if os.path.exists(wav_path):
-            waveform, sample_rate = torchaudio.load(wav_path)
-        else:
-            os.remove(tmp_file_path)
-            raise HTTPException(status_code=400, detail=f"Error parsing audio: {e}")
-
-    try:
+        waveform, sample_rate = load_audio_tensor(tmp_file_path)
         input_tensors = preprocess(waveform, sample_rate)
         
         if not input_tensors:
@@ -143,12 +195,13 @@ async def inference(file: UploadFile = File(...)):
             confidence = probs.mean().item()
 
         label = "Real" if confidence >= 0.4 else "Fake"
-        return {"prediction": label, "confidence": confidence}
+        return {"prediction": label, "confidence": float(confidence)}
     finally:
         if os.path.exists(tmp_file_path):
-            os.remove(tmp_file_path)
-        if os.path.exists(wav_path):
-            os.remove(wav_path)
+            try:
+                os.remove(tmp_file_path)
+            except Exception:
+                pass
 
 @app.post("/api/transactions/verify")
 async def verify_transaction(
@@ -159,28 +212,25 @@ async def verify_transaction(
 ):
     # Predict voice authenticity
     inference_result = await inference(file)
-    confidence = inference_result["confidence"]
-    label = inference_result["prediction"]
+    confidence = float(inference_result.get("confidence", 0.5))
+    label = str(inference_result.get("prediction", "Uncertain"))
     
     # Risk Engine Logic
-    # confidence > 0.4 means Real. If confidence is high, risk is low.
-    # risk_score maps 0 to 1, where 1 is highest risk.
     if label == "Fake":
-        risk_score = 1.0 - confidence # e.g. confidence = 0.2, risk = 0.8
+        risk_score = 1.0 - (confidence * 0.5) # Minimum 50% risk for fake
     else:
-        risk_score = 1.0 - confidence # confidence = 0.9, risk = 0.1
+        risk_score = 1.0 - confidence
         
-    # Scale risk slightly
-    risk_score = min(max(risk_score, 0.0), 1.0)
+    risk_score = min(max(float(risk_score), 0.0), 1.0)
     
     status = "approved"
-    if risk_score > 0.7:
+    if risk_score > 0.6 or label == "Fake":
         status = "declined"
-    elif risk_score > 0.4 and amount > 1000:
+    elif risk_score > 0.3 and float(amount) > 1000:
         status = "hold"
         
     # Save Transaction
-    tx = Transaction(amount=amount, recipient=recipient, status=status, risk_score=risk_score)
+    tx = Transaction(amount=float(amount), recipient=str(recipient), status=status, risk_score=float(risk_score))
     db.add(tx)
     db.commit()
     db.refresh(tx)
