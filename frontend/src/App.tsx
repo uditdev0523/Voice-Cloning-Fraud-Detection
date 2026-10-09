@@ -1,5 +1,5 @@
-import React, { useState, useRef } from 'react';
-import { Mic, Square, Upload, CheckCircle, AlertTriangle, FileAudio, RefreshCw, Send } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { Mic, Square, Upload, CheckCircle, AlertTriangle, FileAudio, RefreshCw, Send, Wifi, WifiOff, Settings } from 'lucide-react';
 import axios from 'axios';
 
 function App() {
@@ -10,6 +10,17 @@ function App() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<BlobPart[]>([]);
 
+  // API Backend URL Configuration
+  const defaultBase = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+    ? 'http://localhost:8000'
+    : (import.meta.env.VITE_API_URL || 'https://voice-cloning-fraud-detection.onrender.com');
+
+  const [apiUrl, setApiUrl] = useState<string>(() => {
+    return localStorage.getItem('voiceguard_api_url') || defaultBase;
+  });
+  const [showConfig, setShowConfig] = useState(false);
+  const [backendStatus, setBackendStatus] = useState<'connected' | 'waking' | 'offline'>('waking');
+
   const [inferenceResult, setInferenceResult] = useState<{prediction: string, confidence: number} | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -18,6 +29,34 @@ function App() {
   const [amount, setAmount] = useState<string>('500');
   const [recipient, setRecipient] = useState<string>('John Doe');
   const [simResult, setSimResult] = useState<any>(null);
+
+  const cleanUrl = apiUrl.replace(/\/+$/, '');
+
+  // Pre-warm backend immediately on page load to eliminate cold-start latency
+  useEffect(() => {
+    let isMounted = true;
+    const checkBackend = async () => {
+      try {
+        await axios.get(`${cleanUrl}/health`, { timeout: 8000 });
+        if (isMounted) setBackendStatus('connected');
+      } catch {
+        if (isMounted) setBackendStatus('waking');
+      }
+    };
+
+    checkBackend();
+    const interval = setInterval(checkBackend, 10000);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [cleanUrl]);
+
+  const handleSaveApiUrl = (newUrl: string) => {
+    setApiUrl(newUrl);
+    localStorage.setItem('voiceguard_api_url', newUrl);
+    setBackendStatus('waking');
+  };
 
   const startRecording = async () => {
     try {
@@ -71,10 +110,11 @@ function App() {
     formData.append('file', audioFile);
 
     try {
-      const res = await axios.post('http://localhost:8000/api/inference', formData);
+      const res = await axios.post(`${cleanUrl}/api/inference`, formData, { timeout: 60000 });
       setInferenceResult(res.data);
+      setBackendStatus('connected');
     } catch (err: any) {
-      setError(err.response?.data?.detail || err.message || "An error occurred");
+      setError(err.response?.data?.detail || err.message || "Failed to process audio. Ensure backend is running.");
     } finally {
       setLoading(false);
     }
@@ -90,10 +130,11 @@ function App() {
     formData.append('recipient', recipient);
 
     try {
-      const res = await axios.post('http://localhost:8000/api/transactions/verify', formData);
+      const res = await axios.post(`${cleanUrl}/api/transactions/verify`, formData, { timeout: 60000 });
       setSimResult(res.data);
+      setBackendStatus('connected');
     } catch (err: any) {
-      setError(err.response?.data?.detail || err.message || "An error occurred");
+      setError(err.response?.data?.detail || err.message || "Failed to verify transaction. Ensure backend is running.");
     } finally {
       setLoading(false);
     }
@@ -101,6 +142,51 @@ function App() {
 
   return (
     <div className="min-h-screen p-8 bg-slate-900 font-sans text-slate-100 flex flex-col items-center">
+      {/* Backend Latency / Status Banner */}
+      <div className="w-full max-w-4xl mb-4 flex items-center justify-between px-4 py-2 bg-slate-800/80 rounded-lg border border-slate-700 text-xs text-slate-300">
+        <div className="flex items-center space-x-2">
+          {backendStatus === 'connected' ? (
+            <span className="flex items-center text-emerald-400 font-medium">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 mr-2 animate-ping"></span>
+              <Wifi className="w-3.5 h-3.5 mr-1" /> AI Engine Connected & Ready (Ultra-low latency)
+            </span>
+          ) : (
+            <span className="flex items-center text-amber-400 font-medium">
+              <span className="w-2 h-2 rounded-full bg-amber-400 mr-2 animate-pulse"></span>
+              <WifiOff className="w-3.5 h-3.5 mr-1" /> Waking up AI engine in background (Render cold-start)...
+            </span>
+          )}
+        </div>
+        <button 
+          onClick={() => setShowConfig(!showConfig)}
+          className="flex items-center hover:text-indigo-400 transition-colors text-slate-400"
+        >
+          <Settings className="w-3.5 h-3.5 mr-1" /> API Settings
+        </button>
+      </div>
+
+      {showConfig && (
+        <div className="w-full max-w-4xl mb-4 p-4 bg-slate-800 rounded-lg border border-indigo-500/40 text-xs">
+          <label className="block text-slate-300 font-medium mb-1">Backend API Base URL:</label>
+          <div className="flex gap-2">
+            <input 
+              type="text" 
+              value={apiUrl}
+              onChange={(e) => handleSaveApiUrl(e.target.value)}
+              className="flex-1 bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-slate-200 font-mono text-xs focus:outline-none focus:border-indigo-500"
+              placeholder="e.g. https://your-app.onrender.com or http://localhost:8000"
+            />
+            <button 
+              onClick={() => handleSaveApiUrl('http://localhost:8000')}
+              className="px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded text-slate-200"
+            >
+              Localhost
+            </button>
+          </div>
+          <p className="text-slate-400 mt-1">Render Free Tier services take ~30-50s to wake up on the first request if idle.</p>
+        </div>
+      )}
+
       <header className="mb-8 text-center">
         <h1 className="text-4xl font-extrabold bg-gradient-to-r from-blue-400 to-indigo-500 bg-clip-text text-transparent mb-2">
           VoiceGuard AI

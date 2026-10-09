@@ -16,13 +16,13 @@ class AttentionPool(nn.Module):
         return (weights * x).sum(dim=1)    # [B, D]
 
 class CRNNWithAttn(nn.Module):
-    def __init__(self,  pretrained=True, hidden_size=128, num_layers=1, dropout=0.2):
+    def __init__(self, pretrained=False, hidden_size=128, num_layers=1, dropout=0.2):
         super().__init__()
-        # 1. Pretrained ResNet18
+        # 1. ResNet18 - disable default weights download since best_model10.pth supplies all weights
         if pretrained:
-          resnet = models.resnet18(weights='DEFAULT')
+            resnet = models.resnet18(weights='DEFAULT')
         else:
-          resnet = models.resnet18()
+            resnet = models.resnet18(weights=None)
         # Adapt first conv to accept 1-channel input
         w = resnet.conv1.weight.data.clone()
         resnet.conv1 = nn.Conv2d(2, 64, kernel_size=7, stride=2, padding=3, bias=False)
