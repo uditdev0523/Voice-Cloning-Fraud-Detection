@@ -68,13 +68,13 @@ async def startup_event():
     except Exception as e:
         print(f"Model warmup skipped: {e}")
 
-@app.get("/")
-def root():
-    return {"status": "ok", "service": "VoiceGuard AI API"}
-
 @app.get("/health")
 def health():
     return {"status": "healthy"}
+
+@app.get("/api/health")
+def api_health():
+    return {"status": "ok", "service": "VoiceGuard AI API"}
 
 def get_db():
     db = SessionLocal()
@@ -197,10 +197,42 @@ async def verify_transaction(
 def get_transactions(db: Session = Depends(get_db)):
     return db.query(Transaction).order_by(Transaction.timestamp.desc()).limit(100).all()
 
-# Serve static frontend directly if built
+# Serve static frontend directly
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-if os.path.exists("dist"):
-    app.mount("/", StaticFiles(directory="dist", html=True), name="static")
-elif os.path.exists("../frontend/dist"):
-    app.mount("/", StaticFiles(directory="../frontend/dist", html=True), name="static")
+
+dist_dir = "dist" if os.path.exists("dist") else ("../frontend/dist" if os.path.exists("../frontend/dist") else None)
+
+if dist_dir and os.path.exists(os.path.join(dist_dir, "assets")):
+    app.mount("/assets", StaticFiles(directory=os.path.join(dist_dir, "assets")), name="assets")
+
+@app.get("/favicon.svg")
+def favicon():
+    if dist_dir and os.path.exists(os.path.join(dist_dir, "favicon.svg")):
+        return FileResponse(os.path.join(dist_dir, "favicon.svg"))
+    raise HTTPException(status_code=404)
+
+@app.get("/icons.svg")
+def icons():
+    if dist_dir and os.path.exists(os.path.join(dist_dir, "icons.svg")):
+        return FileResponse(os.path.join(dist_dir, "icons.svg"))
+    raise HTTPException(status_code=404)
+
+@app.get("/")
+def serve_index():
+    if dist_dir and os.path.exists(os.path.join(dist_dir, "index.html")):
+        return FileResponse(os.path.join(dist_dir, "index.html"))
+    return {"status": "ok", "service": "VoiceGuard AI API"}
+
+@app.get("/{full_path:path}")
+def catch_all(full_path: str):
+    if dist_dir:
+        file_path = os.path.join(dist_dir, full_path)
+        if os.path.isfile(file_path):
+            return FileResponse(file_path)
+        index_file = os.path.join(dist_dir, "index.html")
+        if os.path.isfile(index_file):
+            return FileResponse(index_file)
+    raise HTTPException(status_code=404, detail="Not Found")
+
 
