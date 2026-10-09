@@ -1,126 +1,93 @@
-# Audio deepfake fraud detection system
+# VoiceGuard AI — Real-Time Voice Cloning Fraud Detection
 
-A machine learning-based system for detecting fraudulent audio recordings using deep learning techniques. This project is a working proof-of-concept implementation of the solution described in the [Hyperplane article on Audio Deepfake Fraud Detection](https://thehyperplane.substack.com/p/audio-deepfake-fraud-detection-system).
+VoiceGuard AI is a sophisticated, real-time system designed to identify potential voice-cloning fraud in banking and payment workflows. It operates by analyzing voice inputs during transaction verifications and providing a rolling risk score based on the authenticity of the voice.
 
-![title](images/Audio%20deepfake%20fraud%20detection%20system.png)
-
-## Table of Contents
-- [Overview](#overview)
-- [Features](#features)
-- [Prerequisites](#prerequisites)
-- [Installation](#installation)
-- [Usage](#usage)
-- [Project Structure](#project-structure)
-- [Development](#development)
-- [License](#license)
-
-## Overview
-
-This project implements a deep learning-based solution for detecting fraudulent audio recordings, addressing a critical challenge in today's digital landscape where voice-based fraud is becoming increasingly sophisticated. According to recent reports, impersonation scams involving cloned voices generate over $25 billion in losses annually, with the technology required to replicate voices being easily available online.
-
-The system uses a combination of:
-- Pre-trained ResNet18 model with Bi-GRU for classification
-- Mel spectrograms with masking for robust feature extraction
-- Advanced data augmentation techniques including time shift, noise addition, pitch shift, and gain adjustments
-- A balanced dataset combining ASV Spoof 2019 and Orpheus-generated samples
-
-The project achieves 95-97% precision and recall in detecting fraudulent audio, making it particularly valuable for industries such as:
-- Finance
-- Customer Support
-- Telecommunications
-- Healthcare
+This project was built upon the [Fraud Audio Detection](https://github.com/mlvanguards/fraud-audio-detection) repository, reusing the powerful ResNet18 + Bi-GRU deep learning architecture. 
 
 ## Features
 
-- High-accuracy audio fraud detection (95-97% precision & recall)
-- Advanced deep learning model combining ResNet18 and Bi-GRU
-- Robust feature extraction using Mel spectrograms with masking
-- Comprehensive data augmentation pipeline:
-  - Time shifting
-  - Noise addition
-  - Pitch shifting
-  - Spectrogram masking
-- User-friendly web interface built with Streamlit
-- Docker support for easy deployment
-- Python 3.11+ compatibility
-- Efficient dependency management with uv
+- **Real-Time Inference API:** FastAPI-powered backend for fast and efficient audio fraud detection.
+- **Transaction Simulator:** A comprehensive banking dashboard to simulate high-risk money transfers.
+- **Microphone Audio Processing:** Records voice data directly from the browser for live evaluation.
+- **Privacy & Security First:** Adheres to consent-driven recording, short-lived audio buffers, minimal metadata logging, and avoids keeping raw recordings in application logs.
+- **Rolling Risk Engine:** Evaluates transactions not just on voice cloning probability, but combined with the transaction amount and user risk context.
 
-## Prerequisites
+## Technology Stack
 
-- Python 3.11 or higher
-- uv
-- Docker (optional, for containerized deployment)
-- Make (for using Makefile commands)
+- **Backend:** FastAPI, Python, PyTorch, SQLAlchemy (SQLite), Uvicorn
+- **Frontend:** React, Vite, TailwindCSS, Lucide Icons
+- **Machine Learning:** PyTorch, TorchAudio (ResNet18 + Bi-GRU)
+- **Deployment:** Docker
 
-## Installation
+## Installation (Windows PowerShell)
 
-### Local Development Setup
+Ensure you have Python 3.11+, Node.js 18+, and ffmpeg installed on your Windows machine.
 
-1. Clone the repository:
-```bash
-git clone https://github.com/mlvanguards/fraud-audio-detection.git
-cd fraud-audio-detection
+### 1. Clone the repository and set up Backend
+```powershell
+git clone https://github.com/your-username/voiceguard-ai.git
+cd voiceguard-ai\backend
+
+# Create virtual environment and install dependencies
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+
+# Run the FastAPI server
+uvicorn main:app --reload
 ```
 
-2. Install dependencies:
-```bash
-uv sync
+### 2. Set up Frontend
+Open a new PowerShell window:
+```powershell
+cd voiceguard-ai\frontend
+
+# Install node dependencies
+npm install
+
+# Run the Vite development server
+npm run dev
 ```
 
-3. Activate a virtual environment:
-```bash
-source .venv/bin/activate  # On Windows, use `.venv\Scripts\activate`
+### 3. Environment Variables
+Copy `.env.example` to `.env` in the root directory and configure as needed.
+By default, the backend runs on `http://localhost:8000`. No external API keys are required for core functionality.
+
+## API Documentation
+
+- `POST /api/inference`
+  - Accepts a `multipart/form-data` with a `file` field containing audio (`.wav`, `.flac`, `.webm`).
+  - Returns: `{"prediction": "Real", "confidence": 0.95}`
+
+- `POST /api/transactions/verify`
+  - Accepts `amount`, `recipient`, and `file` via form data.
+  - Simulates a banking transaction workflow and risk scoring based on voice input.
+  - Returns transaction details, status (`approved`, `declined`, `hold`), and risk metrics.
+
+- `GET /api/transactions`
+  - Retrieves a list of past simulated transactions.
+
+## Evaluation and Testing
+
+Evaluation is a crucial part of VoiceGuard AI. To run the automated tests on the FastAPI backend:
+```powershell
+cd backend
+pytest test_main.py
+```
+*Note: Due to lack of localized evaluation datasets, full F1 Score, Precision, and Recall testing matrices are omitted from unit tests but can be run using the original model scripts.*
+
+## Docker Deployment
+Build and run the backend using Docker:
+```powershell
+docker build -t voiceguard-api .
+docker run -p 8000:8000 voiceguard-api
 ```
 
-### Docker Setup
+## Security & Privacy
+- **Consent:** The frontend explicitly asks for microphone permission and only records when the user presses the 'Record' button.
+- **Data Minimization:** Audio is kept in memory during inference and temporary files are immediately deleted. No raw audio is stored in the SQLite database.
+- **Attribution:** Model architecture and weights are attributed to MLVanguards.
 
-Build and run using Docker:
-```bash
-docker build -t fraud-audio-detection .
-docker run -p 8501:8501 --rm fraud-audio-detection
-```
-
-## Usage
-
-### Running Locally
-
-Start the Streamlit application:
-```bash
-streamlit run src/main.py
-```
-
-The application will be available at `http://localhost:8501`
-
-### Using Docker
-
-The application will be available at `http://localhost:8501` after running the Docker container.
-
-## Project Structure
-
-```
-fraud-audio-detection/
-├── data/               # Data directory
-├── models/            # Trained models
-├── notebooks/         # Jupyter notebooks
-├── src/              # Source code
-├── tests/            # Test files
-├── Dockerfile        # Docker configuration
-├── Makefile         # Build automation
-├── pyproject.toml   # Project configuration
-└── README.md        # This file
-```
-
-## Development
-
-### Key Dependencies
-
-- PyTorch (2.7.0)
-- TorchAudio (2.7.0)
-- TorchVision (0.22.0)
-- Streamlit (1.45.1)
-- SoundFile (0.13.1)
-
-
-## License
-
-This project is licensed under the terms of the license included in the repository.
+## Limitations & Troubleshooting
+- **Model Bias:** The underlying model may misclassify heavily compressed telephone audio or thick accents. 
+- **Dependencies:** If you face torchaudio/webm issues, ensure `ffmpeg` is installed and in your system PATH.
