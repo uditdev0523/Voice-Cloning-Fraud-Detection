@@ -2,7 +2,8 @@ fastapi
 uvicorn
 sqlalchemy
 python-multipart
+soundfile
+--extra-index-url https://download.pytorch.org/whl/cpu
 torch
 torchaudio
 torchvision
-soundfile
